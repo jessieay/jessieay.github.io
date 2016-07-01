@@ -1,0 +1,70 @@
+---
+layout: post
+title: Times/Zones in Rails 5
+date: 2016-07-01 22:12:36.000000000 -07:00
+type: post
+published: true
+status: publish
+categories: []
+tags: []
+meta:
+  _rest_api_published: '1'
+  _rest_api_client_id: "-1"
+  _publicize_job_id: '24386695386'
+author:
+  login: jessieay
+  email: jessie@thoughtbot.com
+  display_name: jessieay
+  first_name: ''
+  last_name: ''
+---
+<p><a href="http://weblog.rubyonrails.org/2016/6/30/Rails-5-0-final/">Rails 5 was released yesterday</a> and I, like many of my Ruby friends, spent a few hours today trying to upgrade an app in order to see where I hit roadblocks.</p>
+<p>I saw that thoughbot <a href="https://robots.thoughtbot.com/thoughtbot-ruby-open-source-is-ready-for-Rails-5">already upgraded many of their open source libs for Rails 5</a>, so I generated a Rails 5 application using thoughtbot's Rails template, <a href="https://github.com/thoughtbot/suspenders">Suspenders</a>, in order to compare it with my existing Rails 4 application.</p>
+<p>Once I upgrade the various config files and ran my test suite, I was thrilled to see that only two tests were failing. I was less than thrilled when I saw that they were failing due to a timezone issue. Timezones are really the worst.</p>
+<p>While I am still working on getting my app up and running on Rails 5, I did figure out the source of the spec failures.</p>
+<p>Here is the warning I saw on running <code>rake</code> that helped me figure out what was going on:</p>
+<pre><code>DEPRECATION WARNING: Time columns will become time zone aware in Rails 5.1. 
+This still causes `String`s to be parsed as if they were in `Time.zone`,
+and `Time`s to be converted to `Time.zone`.
+To keep the old behavior, you must add the following to your initializer:
+
+config.active_record.time_zone_aware_types = [:datetime]
+
+To silence this deprecation warning, add the following:
+
+config.active_record.time_zone_aware_types = [:datetime, :time]
+</code></pre>
+<p>I decided to inspect the data being created in my tests to see if I could understand how this change in behavior was affecting my code:</p>
+<pre><code># Rails 5
+% time = Time.current.in_time_zone("Eastern Time (US &amp; Canada)")
+=&gt; Fri, 01 Jul 2016 07:00:00 EDT -04:00
+% message.update(time_of_day: time)
+=&gt; true
+% message.time_of_day
+=&gt; Fri, 01 Jul 2016 07:00:00 EDT -04:00,
+</code></pre>
+<p>I then switched back to my <code>master</code> branch to compare:</p>
+<pre><code># Rails 4
+% time = Time.current.in_time_zone("Eastern Time (US &amp; Canada)")
+=&gt; Fri, 01 Jul 2016 07:00:00 EDT -04:00
+% message.update(time_of_day: time)
+=&gt; true
+% message.time_of_day
+=&gt; 2016-07-01 11:00:00 UTC
+</code></pre>
+<p>Lightbulb moment! My application's time zone has always been UTC. But when I was using Rails 4, I as able to store timestamps as ET in my database. In Rails 5, those ET timestamps are automatically converted to UTC.</p>
+<p>While this confused me at first, the new behavior makes a lot more sense. My application stores time information on messages and sends those messages to users at that time <em>in their time zone</em>.</p>
+<p>My test had previously worked because I was checking that a user in ET received a message at 7 ET when the message was scheduled to go out at 7 ET. But what I really wanted to test that a user gets a message at 7 ET when the message is scheduled to go out at 7 UTC.</p>
+<p>Here is the update I made to get it to pass:</p>
+<pre><code>% user_time_zone = "Eastern Time (US &amp; Canada)"
+=&gt; "Eastern Time (US &amp; Canada)"
+% current_time_for_user = Time.current.in_time_zone(user_time_zone)
+=&gt; Fri, 01 Jul 2016 07:00:00 EDT -04:00
+% current_time_et_as_utc = Time.zone.utc_to_local(current_time_for_user)
+=&gt; 2016-07-01 07:00:00 UTC
+% message.update(time_of_day: current_time_et_as_utc)
+=&gt; true
+% message.time_of_day
+=&gt; =&gt; 2016-07-01 07:00:00 UTC
+</code></pre>
+<p>Code that actually does what I want it to do and Rails 5-compliant. Hooray!</p>
